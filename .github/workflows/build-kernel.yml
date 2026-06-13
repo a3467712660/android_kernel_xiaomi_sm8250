@@ -77,6 +77,69 @@ jobs:
 
           make -j"$JOBS" O=out ARCH=arm64 Image.gz dtbs 2>&1 | tee build.log
 
+      - name: Package AnyKernel3 flashable zip
+        if: success()
+        run: |
+          set -euxo pipefail
+          DEVICE="${{ inputs.device }}"
+          AK3_DIR="AnyKernel3-ReSukiSU-${DEVICE}"
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git "$AK3_DIR"
+          rm -rf "$AK3_DIR/.git" "$AK3_DIR/.github" "$AK3_DIR/README.md"
+
+          cp out/arch/arm64/boot/Image.gz "$AK3_DIR/Image.gz"
+          if [ -f out/arch/arm64/boot/Image.gz-dtb ]; then
+            cp out/arch/arm64/boot/Image.gz-dtb "$AK3_DIR/Image.gz-dtb"
+          fi
+
+          cat > "$AK3_DIR/anykernel.sh" <<'EOF'
+          ### AnyKernel3 Ramdisk Mod Script
+          ## Auto-packaged ReSukiSU SM8250 kernel
+          
+          properties() { '
+          kernel.string=ReSukiSU SM8250 Kernel by a3467712660
+          do.devicecheck=1
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=alioth
+          device.name2=aliothin
+          device.name3=cmi
+          device.name4=umi
+          device.name5=lmi
+          device.name6=munch
+          device.name7=apollo
+          device.name8=cas
+          device.name9=thyme
+          device.name10=psyche
+          device.name11=dagu
+          device.name12=elish
+          device.name13=enuma
+          supported.versions=
+          supported.patchlevels=
+          supported.vendorpatchlevels=
+          '; }
+          
+          boot_attributes() {
+          set_perm_recursive 0 0 755 644 $RAMDISK/*;
+          set_perm_recursive 0 0 750 750 $RAMDISK/init* $RAMDISK/sbin;
+          }
+          
+          BLOCK=boot;
+          IS_SLOT_DEVICE=1;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+          
+          . tools/ak3-core.sh;
+          
+          split_boot;
+          flash_boot;
+          EOF
+
+          (cd "$AK3_DIR" && zip -r9 "../AnyKernel3-ReSukiSU-${DEVICE}-${GITHUB_RUN_NUMBER}.zip" . -x '*.git*')
+          mkdir -p artifacts
+          cp "AnyKernel3-ReSukiSU-${DEVICE}-${GITHUB_RUN_NUMBER}.zip" artifacts/
+
       - name: Collect artifacts
         if: always()
         run: |
@@ -100,3 +163,4 @@ jobs:
           name: sm8250-resukisu-${{ inputs.device }}-${{ github.run_number }}
           path: artifacts/
           if-no-files-found: warn
+
