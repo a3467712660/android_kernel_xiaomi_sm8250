@@ -56,7 +56,8 @@ jobs:
           fi
 
           make O=out ARCH=arm64 vendor/kona-perf_defconfig
-          scripts/kconfig/merge_config.sh -m -O out out/.config "$DEVICE_CONFIG"
+          COMMON_CONFIG="arch/arm64/configs/vendor/xiaomi/sm8250-common.config"
+          scripts/kconfig/merge_config.sh -m -O out out/.config "$COMMON_CONFIG" "$DEVICE_CONFIG"
           make O=out ARCH=arm64 olddefconfig
 
           echo "Effective KSU config:"
