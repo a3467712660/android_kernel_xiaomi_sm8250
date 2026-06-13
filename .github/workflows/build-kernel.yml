@@ -1,0 +1,110 @@
+name: Build ReSukiSU SM8250 Kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      device:
+        description: "Xiaomi SM8250 device config name under arch/arm64/configs/vendor/xiaomi, e.g. alioth/cmi/umi/lmi/munch"
+        required: true
+        default: "alioth"
+      jobs:
+        description: "Parallel build jobs"
+        required: true
+        default: "4"
+
+jobs:
+  build:
+    name: Build kernel (${{ inputs.device }})
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison build-essential ccache curl flex git libssl-dev \
+            libelf-dev lld llvm make python3 unzip zip \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+
+      - name: Download Android clang toolchain
+        run: |
+          set -euxo pipefail
+          mkdir -p toolchains
+          cd toolchains
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-prebuilts
+          CLANG_DIR=$(find clang-prebuilts/clang-* -maxdepth 1 -type d | sort | tail -n 1)
+          echo "CLANG_DIR=$PWD/$CLANG_DIR" >> "$GITHUB_ENV"
+          "$PWD/$CLANG_DIR/bin/clang" --version
+
+      - name: Configure kernel
+        run: |
+          set -euxo pipefail
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export PATH="$CLANG_DIR/bin:$PATH"
+          export CC=clang
+          export LLVM=1
+          export LLVM_IAS=1
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+
+          DEVICE="${{ inputs.device }}"
+          DEVICE_CONFIG="arch/arm64/configs/vendor/xiaomi/${DEVICE}.config"
+          if [ ! -f "$DEVICE_CONFIG" ]; then
+            echo "Device config not found: $DEVICE_CONFIG"
+            echo "Available configs:"
+            find arch/arm64/configs/vendor/xiaomi -maxdepth 1 -name '*.config' -printf '%f\n' | sort
+            exit 1
+          fi
+
+          make O=out ARCH=arm64 vendor/kona-perf_defconfig
+          scripts/kconfig/merge_config.sh -m -O out out/.config "$DEVICE_CONFIG"
+          make O=out ARCH=arm64 olddefconfig
+
+          echo "Effective KSU config:"
+          grep -E 'CONFIG_KSU|CONFIG_KALLSYMS_ALL|CONFIG_OVERLAY_FS|CONFIG_SECURITY_SELINUX' out/.config || true
+
+      - name: Build kernel
+        run: |
+          set -o pipefail
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export PATH="$CLANG_DIR/bin:$PATH"
+          export CC=clang
+          export LLVM=1
+          export LLVM_IAS=1
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          JOBS="${{ inputs.jobs }}"
+
+          make -j"$JOBS" O=out ARCH=arm64 Image.gz dtbs 2>&1 | tee build.log
+
+      - name: Collect artifacts
+        if: always()
+        run: |
+          set +e
+          mkdir -p artifacts
+          cp build.log artifacts/ 2>/dev/null || true
+          cp out/.config artifacts/kernel.config 2>/dev/null || true
+          cp out/arch/arm64/boot/Image artifacts/ 2>/dev/null || true
+          cp out/arch/arm64/boot/Image.gz artifacts/ 2>/dev/null || true
+          cp out/arch/arm64/boot/Image.gz-dtb artifacts/ 2>/dev/null || true
+          if [ -d out/arch/arm64/boot/dts ]; then
+            mkdir -p artifacts/dts
+            find out/arch/arm64/boot/dts -name '*.dtb' -o -name '*.dtbo' | xargs -r -I{} cp --parents {} artifacts/dts/
+          fi
+          find artifacts -maxdepth 4 -type f -printf '%p\n' | sort
+
+      - name: Upload build artifacts and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sm8250-resukisu-${{ inputs.device }}-${{ github.run_number }}
+          path: artifacts/
+          if-no-files-found: warn
